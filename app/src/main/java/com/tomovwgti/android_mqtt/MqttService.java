@@ -3,16 +3,17 @@ package com.tomovwgti.android_mqtt;
 
 import java.util.Locale;
 
+import org.eclipse.paho.client.mqttv3.IMqttDeliveryToken;
 import org.eclipse.paho.client.mqttv3.MqttCallback;
 import org.eclipse.paho.client.mqttv3.MqttClient;
 import org.eclipse.paho.client.mqttv3.MqttConnectOptions;
-import org.eclipse.paho.client.mqttv3.MqttDefaultFilePersistence;
+import org.eclipse.paho.client.mqttv3.persist.MqttDefaultFilePersistence;
 import org.eclipse.paho.client.mqttv3.MqttDeliveryToken;
 import org.eclipse.paho.client.mqttv3.MqttException;
 import org.eclipse.paho.client.mqttv3.MqttMessage;
 import org.eclipse.paho.client.mqttv3.MqttPersistenceException;
 import org.eclipse.paho.client.mqttv3.MqttTopic;
-import org.eclipse.paho.client.mqttv3.internal.MemoryPersistence;
+import org.eclipse.paho.client.mqttv3.persist.MemoryPersistence;
 
 import android.app.AlarmManager;
 import android.app.Notification;
@@ -47,7 +48,8 @@ public class MqttService extends Service implements MqttCallback {
     public static final int MQTT_QOS_1 = 1;
     // QOS Level 2 ( Delivery only once with confirmation with handshake )
     public static final int MQTT_QOS_2 = 2;
-
+    // retained message
+    public static final boolean MQTT_NO_RETAIN = false;
     // This the application level keep-alive interval, that is used by the
     // AlarmManager
     // to keep the connection active, even when the device goes to sleep.
@@ -73,6 +75,8 @@ public class MqttService extends Service implements MqttCallback {
     private static final String ACTION_START = TAG + ".START";
     // Action to stop
     private static final String ACTION_STOP = TAG + ".STOP";
+    // Action to subscribe
+    private static final String ACTION_SUBSCRIBE = TAG + ".SUBSCRIBE";
     // Action to publish
     private static final String ACTION_PUBLISH = TAG + ".PUBLISH";
     // Action to keep alive used by alarm manager
@@ -119,8 +123,13 @@ public class MqttService extends Service implements MqttCallback {
     public static final String PREF_PASSWORD = "password";
     // We also store the topic
     public static final String PREF_TOPIC = "topic";
-    // We also store the topic
+    // We also store the sessin
     public static final String PREF_SESSION = "session";
+    // We also store the publish topic
+    public static final String PREF_PUBLISH_TOPIC = "publish";
+    // We also store the publish message
+    public static final String PREF_PUBLISH_MESSAGE = "message";
+
     // We store the last retry interval
     public static final String PREF_RETRY = "retryInterval";
 
@@ -130,7 +139,7 @@ public class MqttService extends Service implements MqttCallback {
     /**
      * Start MQTT Client
      * 
-     * @param Context context to start the service with
+     * @param ctx context to start the service with
      * @return void
      */
     public static void actionStart(Context ctx) {
@@ -142,7 +151,7 @@ public class MqttService extends Service implements MqttCallback {
     /**
      * Stop MQTT Client
      * 
-     * @param Context context to start the service with
+     * @param ctx context to start the service with
      * @return void
      */
     public static void actionStop(Context ctx) {
@@ -151,10 +160,30 @@ public class MqttService extends Service implements MqttCallback {
         ctx.startService(i);
     }
 
+    /**
+     * Subscribe topic
+     *
+     * @param ctx
+     * @param topic
+     * @param qos
+     */
+    public static void actionSubscribe(Context ctx, String topic, int qos) {
+        Intent i = new Intent(ctx, MqttService.class);
+        i.setAction(ACTION_SUBSCRIBE);
+        ctx.startService(i);
+    }
+
+    /**
+     * Publish message
+     *
+     * @param ctx
+     * @param topic
+     * @param message
+     */
     public static void actionPublish(Context ctx, String topic, String message) {
         Intent i = new Intent(ctx, MqttService.class);
-        i.putExtra("TOPIC", topic);
-        i.putExtra("MESSAGE", message);
+        i.putExtra(PREF_PUBLISH_TOPIC, topic);
+        i.putExtra(PREF_PUBLISH_MESSAGE, message);
         i.setAction(ACTION_PUBLISH);
         ctx.startService(i);
     }
@@ -162,7 +191,7 @@ public class MqttService extends Service implements MqttCallback {
     /**
      * Send a KeepAlive Message
      * 
-     * @param Context context to start the service with
+     * @param ctx context to start the service with
      * @return void
      */
     public static void actionKeepalive(Context ctx) {
@@ -187,13 +216,7 @@ public class MqttService extends Service implements MqttCallback {
 
         mConnHandler = new Handler(thread.getLooper());
 
-        try {
-            mDataStore = new MqttDefaultFilePersistence(getCacheDir().getAbsolutePath());
-        } catch (MqttPersistenceException e) {
-            e.printStackTrace();
-            mDataStore = null;
-            mMemStore = new MemoryPersistence();
-        }
+        mDataStore = new MqttDefaultFilePersistence(getCacheDir().getAbsolutePath());
 
         mOpts = new MqttConnectOptions();
 
@@ -241,17 +264,21 @@ public class MqttService extends Service implements MqttCallback {
                 start();
             } else if (action.equals(ACTION_STOP)) {
                 String topic = mPrefs.getString(PREF_TOPIC, null);
-                try {
-                    mClient.unsubscribe(topic);
-                    Toast.makeText(this, "Unsubscribe: " + topic, Toast.LENGTH_SHORT).show();
-                } catch (MqttException e) {
-                    // TODO Auto-generated catch block
-                    e.printStackTrace();
+                if (!topic.equals("")) {
+                    try {
+                        mClient.unsubscribe(topic);
+                        Toast.makeText(this, "Unsubscribe: " + topic, Toast.LENGTH_SHORT).show();
+                    } catch (MqttException e) {
+                        // TODO Auto-generated catch block
+                        e.printStackTrace();
+                    }
                 }
                 stop();
                 stopSelf();
             } else if (action.equals(ACTION_KEEPALIVE)) {
                 keepAlive();
+            } else if (intent.getAction().equals(ACTION_PUBLISH)) {
+                publish(intent.getStringExtra(PREF_PUBLISH_TOPIC), intent.getStringExtra(PREF_PUBLISH_MESSAGE));
             } else if (action.equals(ACTION_RECONNECT)) {
                 if (isNetworkAvailable()) {
                     reconnectIfNecessary();
@@ -328,7 +355,7 @@ public class MqttService extends Service implements MqttCallback {
         final String username = mPrefs.getString(PREF_USERNAME, null);
         final String password = mPrefs.getString(PREF_PASSWORD, null);
         final String topic = mPrefs.getString(PREF_TOPIC, null);
-        final boolean session = mPrefs.getBoolean(PREF_SESSION, true);
+        final boolean session = mPrefs.getBoolean(PREF_SESSION, MQTT_CLEAN_SESSION);
         Log.d(TAG, "server: " + server);
         Log.d(TAG, "topic: " + topic);
 
@@ -434,6 +461,22 @@ public class MqttService extends Service implements MqttCallback {
                 ex.printStackTrace();
                 stop();
             }
+        }
+    }
+
+    /**
+     * publish message
+     *
+     * @param topic
+     * @param message
+     */
+    private synchronized void publish(String topic, String message) {
+        try {
+            if (mStarted) {
+                mClient.publish(topic, message.getBytes(), MQTT_QOS_1, MQTT_NO_RETAIN);
+            }
+        } catch (MqttException e) {
+            Log.e(TAG, "MqttException: " + (e.getMessage() != null ? e.getMessage() : "NULL"), e);
         }
     }
 
@@ -554,13 +597,10 @@ public class MqttService extends Service implements MqttCallback {
     /**
      * Sends a Keep Alive message to the specified topic
      * 
-     * @see MQTT_KEEP_ALIVE_MESSAGE
-     * @see MQTT_KEEP_ALIVE_TOPIC_FORMAT
      * @return MqttDeliveryToken specified token you can choose to wait for
      *         completion
      */
-    private synchronized MqttDeliveryToken sendKeepAlive() throws MqttConnectivityException,
-            MqttPersistenceException, MqttException {
+    private synchronized MqttDeliveryToken sendKeepAlive() throws MqttConnectivityException, MqttException {
         if (!isConnected())
             throw new MqttConnectivityException();
 
@@ -612,23 +652,19 @@ public class MqttService extends Service implements MqttCallback {
     }
 
     /**
-     * Publish Message Completion
-     */
-    @Override
-    public void deliveryComplete(MqttDeliveryToken arg0) {
-
-    }
-
-    /**
      * Received Message from broker
      */
     @Override
-    public void messageArrived(MqttTopic topic, MqttMessage message) throws Exception {
-        String s = new String(message.getPayload());
+    public void messageArrived(String s, MqttMessage mqttMessage) throws Exception {
         Log.i(TAG,
-                "  Topic:\t" + topic.getName() + "  Message:\t" + s + "  QoS:\t" + message.getQos());
+                "  Topic:\t" + "  Message:\t" + new String(mqttMessage.getPayload()) + "  QoS:\t" + mqttMessage.getQos());
         // Show a notification
         showNotification(s);
+    }
+
+    @Override
+    public void deliveryComplete(IMqttDeliveryToken iMqttDeliveryToken) {
+
     }
 
     /**
