@@ -123,7 +123,7 @@ public class MqttService extends Service implements MqttCallback {
     public static final String PREF_PASSWORD = "password";
     // We also store the topic
     public static final String PREF_TOPIC = "topic";
-    // We also store the sessin
+    // We also store the session
     public static final String PREF_SESSION = "session";
     // We also store the publish topic
     public static final String PREF_PUBLISH_TOPIC = "publish";
@@ -162,13 +162,12 @@ public class MqttService extends Service implements MqttCallback {
 
     /**
      * Subscribe topic
+     *  @param ctx
      *
-     * @param ctx
-     * @param topic
-     * @param qos
      */
-    public static void actionSubscribe(Context ctx, String topic, int qos) {
+    public static void actionSubscribe(Context ctx, String topic) {
         Intent i = new Intent(ctx, MqttService.class);
+        i.putExtra(PREF_TOPIC, topic);
         i.setAction(ACTION_SUBSCRIBE);
         ctx.startService(i);
     }
@@ -264,7 +263,7 @@ public class MqttService extends Service implements MqttCallback {
                 start();
             } else if (action.equals(ACTION_STOP)) {
                 String topic = mPrefs.getString(PREF_TOPIC, null);
-                if (!topic.equals("")) {
+                if (topic != null && !topic.equals("")) {
                     try {
                         mClient.unsubscribe(topic);
                         Toast.makeText(this, "Unsubscribe: " + topic, Toast.LENGTH_SHORT).show();
@@ -277,6 +276,8 @@ public class MqttService extends Service implements MqttCallback {
                 stopSelf();
             } else if (action.equals(ACTION_KEEPALIVE)) {
                 keepAlive();
+            } else if (intent.getAction().equals(ACTION_SUBSCRIBE)) {
+                subscribe(intent.getStringExtra(PREF_TOPIC));
             } else if (intent.getAction().equals(ACTION_PUBLISH)) {
                 publish(intent.getStringExtra(PREF_PUBLISH_TOPIC), intent.getStringExtra(PREF_PUBLISH_MESSAGE));
             } else if (action.equals(ACTION_RECONNECT)) {
@@ -389,11 +390,9 @@ public class MqttService extends Service implements MqttCallback {
                 try {
                     mClient.connect(mOpts);
 
-                    if (!topic.equals("")) {
-                        mClient.subscribe(topic);
-                    }
-
                     mClient.setCallback(MqttService.this);
+                    // subscribe topic
+                    mClient.subscribe(topic);
 
                     // Service is now connected
                     setStarted(true);
@@ -450,7 +449,6 @@ public class MqttService extends Service implements MqttCallback {
         if (isConnected()) {
             try {
                 sendKeepAlive();
-                return;
             } catch (MqttConnectivityException ex) {
                 ex.printStackTrace();
                 reconnectIfNecessary();
@@ -465,16 +463,27 @@ public class MqttService extends Service implements MqttCallback {
     }
 
     /**
+     * subscribe topic
+     * @param topic
+     */
+    private synchronized void subscribe(String topic) {
+        if (mStarted) try {
+            Log.i(TAG, "subscribe: " + topic);
+            mClient.subscribe(topic, MQTT_QOS_1);
+        } catch (MqttException e) {
+            Log.e(TAG, "MqttException: " + (e.getMessage() != null ? e.getMessage() : "NULL"), e);
+        }
+    }
+
+    /**
      * publish message
      *
      * @param topic
      * @param message
      */
     private synchronized void publish(String topic, String message) {
-        try {
-            if (mStarted) {
+        if (mStarted) try {
                 mClient.publish(topic, message.getBytes(), MQTT_QOS_1, MQTT_NO_RETAIN);
-            }
         } catch (MqttException e) {
             Log.e(TAG, "MqttException: " + (e.getMessage() != null ? e.getMessage() : "NULL"), e);
         }
@@ -564,7 +573,7 @@ public class MqttService extends Service implements MqttCallback {
     private boolean isNetworkAvailable() {
         NetworkInfo info = mConnectivityManager.getActiveNetworkInfo();
 
-        return (info == null) ? false : info.isConnected();
+        return (info != null) && info.isConnected();
     }
 
     /**
@@ -577,11 +586,8 @@ public class MqttService extends Service implements MqttCallback {
             Log.i(TAG, "Mismatch between what we think is connected and what is connected");
         }
 
-        if (mClient != null) {
-            return (mStarted && mClient.isConnected()) ? true : false;
-        }
+        return mClient != null && (mStarted && mClient.isConnected());
 
-        return false;
     }
 
     /**
@@ -629,7 +635,7 @@ public class MqttService extends Service implements MqttCallback {
         i.setAction(ACTION_KEEPALIVE);
         PendingIntent pi = PendingIntent.getBroadcast(this, 0, i, PendingIntent.FLAG_NO_CREATE);
 
-        return (pi != null) ? true : false;
+        return (pi != null);
     }
 
     @Override

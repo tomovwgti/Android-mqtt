@@ -63,6 +63,7 @@ public class MyActivity extends Activity {
                 editor.apply();
 
                 MqttService.actionStart(self.getApplicationContext());
+                MqttService.actionSubscribe(self.getApplicationContext(), topic.getText().toString());
                 server.setEnabled(false);
                 port.setEnabled(false);
                 id.setEnabled(false);
