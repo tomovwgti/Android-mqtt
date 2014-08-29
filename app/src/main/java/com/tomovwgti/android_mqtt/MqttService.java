@@ -524,6 +524,16 @@ public class MqttService extends Service implements MqttCallback {
         alarmMgr.set(AlarmManager.RTC_WAKEUP, now + interval, pi);
     }
 
+    // Remove the scheduled reconnect
+    public void cancelReconnect() {
+        Intent i = new Intent();
+        i.setClass(this, MqttService.class);
+        i.setAction(ACTION_RECONNECT);
+        PendingIntent pi = PendingIntent.getService(this, 0, i, 0);
+        AlarmManager alarmMgr = (AlarmManager) getSystemService(ALARM_SERVICE);
+        alarmMgr.cancel(pi);
+    }
+
     // This method does any necessary clean-up need in case the server has been
     // destroyed by the system
     // and then restarted
@@ -564,6 +574,7 @@ public class MqttService extends Service implements MqttCallback {
      */
     private synchronized void reconnectIfNecessary() {
         if (mStarted && mClient == null) {
+            Log.i(TAG, "Reconnecting...");
             connect();
         }
     }
@@ -600,7 +611,28 @@ public class MqttService extends Service implements MqttCallback {
     private final BroadcastReceiver mConnectivityReceiver = new BroadcastReceiver() {
         @Override
         public void onReceive(Context context, Intent intent) {
-            Log.i(TAG, "Connectivity Changed...");
+            // Get network info
+            NetworkInfo info = (NetworkInfo) intent
+                    .getParcelableExtra(ConnectivityManager.EXTRA_NETWORK_INFO);
+
+            // Is there connectivity?
+            boolean hasConnectivity = (info != null && info.isConnected());
+
+            Log.i(TAG, "Connectivity changed: connected=" + hasConnectivity);
+
+            if (hasConnectivity) {
+                reconnectIfNecessary();
+            } else if (mClient != null) {
+                // if there no connectivity, make sure MQTT connection is
+                // destroyed
+                try {
+                    mClient.disconnect();
+                } catch (MqttException e) {
+                    e.printStackTrace();
+                }
+                cancelReconnect();
+                mClient = null;
+            }
         }
     };
 
