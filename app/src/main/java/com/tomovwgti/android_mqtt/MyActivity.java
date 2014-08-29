@@ -65,7 +65,6 @@ public class MyActivity extends Activity implements MqttService.resultCallback {
                 editor.putBoolean(MqttService.PREF_SESSION, session.isChecked());
                 editor.apply();
 
-                MqttService.setOnResultListener(self);
                 MqttService.action(self.getApplicationContext(), MqttService.ACTION_START);
                 MqttService.subscribe(self.getApplicationContext(), topic.getText().toString());
             }
@@ -82,6 +81,8 @@ public class MyActivity extends Activity implements MqttService.resultCallback {
     @Override
     protected void onResume() {
         super.onResume();
+
+        MqttService.setOnResultListener(self);
 
         SharedPreferences p = getSharedPreferences(MqttService.TAG, MODE_PRIVATE);
         boolean started = p.getBoolean(MqttService.PREF_STARTED, false);

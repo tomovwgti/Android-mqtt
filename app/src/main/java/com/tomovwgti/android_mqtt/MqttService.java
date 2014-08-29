@@ -142,6 +142,7 @@ public class MqttService extends Service implements MqttCallback {
 
     public final static int STATUS_SUCCESS = 256;
     private static resultCallback mCallback;
+
     public static void setOnResultListener(resultCallback callback) {
         mCallback = callback;
     }
@@ -339,7 +340,9 @@ public class MqttService extends Service implements MqttCallback {
         }
         unregisterReceiver(mConnectivityReceiver);
         // disconnect success
-        mCallback.onResult(ACTION_STOP, STATUS_SUCCESS, null);
+        if (mCallback != null) {
+            mCallback.onResult(ACTION_STOP, STATUS_SUCCESS, null);
+        }
     }
 
     /**
@@ -403,11 +406,15 @@ public class MqttService extends Service implements MqttCallback {
                     // Star the keep-alives
                     startKeepAlives();
                     // connect success
-                    mCallback.onResult(ACTION_START, STATUS_SUCCESS, null);
+                    if (mCallback != null) {
+                        mCallback.onResult(ACTION_START, STATUS_SUCCESS, null);
+                    }
                 } catch (MqttException e) {
                     // Schedule a reconnect, if we failed to connect
                     setStarted(false);
-                    mCallback.onResult(ACTION_START, e.getReasonCode(), e.getMessage());
+                    if (mCallback != null) {
+                        mCallback.onResult(ACTION_START, e.getReasonCode(), e.getMessage());
+                    }
                     if (isNetworkAvailable()) {
                         scheduleReconnect(mStartTime);
                     }
