@@ -40,6 +40,10 @@ public class MqttService extends Service implements MqttCallback {
 
     private MqttService self = this;
 
+    interface resultCallback {
+        void onResult(String action, int status, String message);
+    }
+
     // handler Thread ID
     private static final String MQTT_THREAD_NAME = "MqttService[" + TAG + "]";
     // QOS Level 0 ( Delivery Once no confirmation )
@@ -72,9 +76,9 @@ public class MqttService extends Service implements MqttCallback {
     // URL Format normaly don't change
     private static final String MQTT_URL_FORMAT = "tcp://%s:%d";
     // Action to start
-    private static final String ACTION_START = TAG + ".START";
+    public static final String ACTION_START = TAG + ".START";
     // Action to stop
-    private static final String ACTION_STOP = TAG + ".STOP";
+    public static final String ACTION_STOP = TAG + ".STOP";
     // Action to subscribe
     private static final String ACTION_SUBSCRIBE = TAG + ".SUBSCRIBE";
     // Action to publish
@@ -111,8 +115,8 @@ public class MqttService extends Service implements MqttCallback {
     private SharedPreferences mPrefs;
     // We store in the preferences, whether or not the service has been started
     public static final String PREF_STARTED = "isStarted";
-    // We also store the device ID
-    public static final String PREF_DEVICE_ID = "deviceID";
+    // We also store the client ID
+    public static final String PREF_CLIENT_ID = "clientID";
     // We also store the server address
     public static final String PREF_SERVER_ADDRESS = "server";
     // We also store the server port
@@ -136,28 +140,21 @@ public class MqttService extends Service implements MqttCallback {
     // Notification id
     private static final int NOTIF_CONNECTED = 0;
 
-    /**
-     * Start MQTT Client
-     * 
-     * @param ctx context to start the service with
-     * @return void
-     */
-    public static void actionStart(Context ctx) {
-        Intent i = new Intent(ctx, MqttService.class);
-        i.setAction(ACTION_START);
-        ctx.startService(i);
+    public final static int STATUS_SUCCESS = 256;
+    private static resultCallback mCallback;
+    public static void setOnResultListener(resultCallback callback) {
+        mCallback = callback;
     }
 
-    /**
-     * Stop MQTT Client
-     * 
-     * @param ctx context to start the service with
-     * @return void
-     */
-    public static void actionStop(Context ctx) {
+    public static void action(Context ctx, String action) {
         Intent i = new Intent(ctx, MqttService.class);
-        i.setAction(ACTION_STOP);
-        ctx.startService(i);
+        if (action.equals(ACTION_START)) {
+            i.setAction(ACTION_START);
+            ctx.startService(i);
+        } else if (action.equals(ACTION_STOP)) {
+            i.setAction(ACTION_STOP);
+            ctx.startService(i);
+        }
     }
 
     /**
@@ -165,7 +162,7 @@ public class MqttService extends Service implements MqttCallback {
      *  @param ctx
      *
      */
-    public static void actionSubscribe(Context ctx, String topic) {
+    public static void subscribe(Context ctx, String topic) {
         Intent i = new Intent(ctx, MqttService.class);
         i.putExtra(PREF_TOPIC, topic);
         i.setAction(ACTION_SUBSCRIBE);
@@ -179,7 +176,7 @@ public class MqttService extends Service implements MqttCallback {
      * @param topic
      * @param message
      */
-    public static void actionPublish(Context ctx, String topic, String message) {
+    public static void publish(Context ctx, String topic, String message) {
         Intent i = new Intent(ctx, MqttService.class);
         i.putExtra(PREF_PUBLISH_TOPIC, topic);
         i.putExtra(PREF_PUBLISH_MESSAGE, message);
@@ -340,8 +337,9 @@ public class MqttService extends Service implements MqttCallback {
                 }
             });
         }
-
         unregisterReceiver(mConnectivityReceiver);
+        // disconnect success
+        mCallback.onResult(ACTION_STOP, STATUS_SUCCESS, null);
     }
 
     /**
@@ -353,6 +351,7 @@ public class MqttService extends Service implements MqttCallback {
         // fetch the server, topic from the preferences.
         final String server = mPrefs.getString(PREF_SERVER_ADDRESS, null);
         final int port = mPrefs.getInt(PREF_SERVER_PORT, 1883);
+        final String clientid = mPrefs.getString(PREF_CLIENT_ID, null);
         final String username = mPrefs.getString(PREF_USERNAME, null);
         final String password = mPrefs.getString(PREF_PASSWORD, null);
         final String topic = mPrefs.getString(PREF_TOPIC, null);
@@ -365,10 +364,10 @@ public class MqttService extends Service implements MqttCallback {
         try {
             if (mDataStore != null) {
                 Log.i(TAG, "Connecting with DataStore");
-                mClient = new MqttClient(url, mPrefs.getString(PREF_DEVICE_ID, ""), mDataStore);
+                mClient = new MqttClient(url, clientid, mDataStore);
             } else {
                 Log.i(TAG, "Connecting with MemStore");
-                mClient = new MqttClient(url, mPrefs.getString(PREF_DEVICE_ID, ""), mMemStore);
+                mClient = new MqttClient(url, clientid, mMemStore);
             }
 
             // username, password
@@ -403,14 +402,12 @@ public class MqttService extends Service implements MqttCallback {
                     mStartTime = System.currentTimeMillis();
                     // Star the keep-alives
                     startKeepAlives();
-
+                    // connect success
+                    mCallback.onResult(ACTION_START, STATUS_SUCCESS, null);
                 } catch (MqttException e) {
                     // Schedule a reconnect, if we failed to connect
-                    Log.i(TAG, "MqttException: "
-                            + (e.getMessage() != null ? e.getMessage() : "NULL"));
-                    Log.i(TAG, "ReasonCode: " + e.getReasonCode());
-                    Toast.makeText(self, e.getMessage(), Toast.LENGTH_LONG).show();
                     setStarted(false);
+                    mCallback.onResult(ACTION_START, e.getReasonCode(), e.getMessage());
                     if (isNetworkAvailable()) {
                         scheduleReconnect(mStartTime);
                     }
@@ -612,7 +609,7 @@ public class MqttService extends Service implements MqttCallback {
 
         if (mKeepAliveTopic == null) {
             mKeepAliveTopic = mClient.getTopic(String.format(Locale.US,
-                    MQTT_KEEP_ALIVE_TOPIC_FORAMT, mPrefs.getString(PREF_DEVICE_ID, "")));
+                    MQTT_KEEP_ALIVE_TOPIC_FORAMT, mPrefs.getString(PREF_CLIENT_ID, "")));
         }
 
         Log.i(TAG, "Sending Keepalive to " + mPrefs.getString(PREF_SERVER_ADDRESS, ""));
